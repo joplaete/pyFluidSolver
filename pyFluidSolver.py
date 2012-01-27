@@ -739,7 +739,6 @@ class FluidSolverC(FluidSolver):
 
 
 if __name__ == "__main__":
-    print "lala"
     app = QtGui.QApplication(sys.argv)
     window = DrawFluidQt()
     #window.enableCExtentions(True)
