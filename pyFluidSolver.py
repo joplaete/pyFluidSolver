@@ -13,6 +13,8 @@ except: print "scipy.weave import failed - FluidSolverC won't work, pure python 
 
 
 class DrawFluidQt(QtGui.QMainWindow):
+    """ Draws the solverdata using PySide or PyQt4
+    """
     def __init__(self, parent=None):
         QtGui.QMainWindow.__init__(self, parent)
         
@@ -24,9 +26,9 @@ class DrawFluidQt(QtGui.QMainWindow):
         # py or c extended solver
         try:
             from scipy import weave
-            self.enableCExtentions(True)
+            self.fs = FluidSolverC()
         except:
-            self.enableCExtentions(False)
+            self.fs = FluidSolver()
         
         self.fs.setup(self.n, self.dt, viscosity=0.0, diffusion=0.0, vorticityConfinement=1, linearSolverIterations=5)
         # draw options
@@ -53,25 +55,10 @@ class DrawFluidQt(QtGui.QMainWindow):
         self.frame = 0
         self.updateStatusBar()
     
-    def enableCExtentions(self, enable):
-        if enable:
-            self.fs = FluidSolverC()
-        else:
-            self.fs = FluidSolver()
-    
-    def I(self,i,j):
-        return i + (self.n + 2) * j
-    
-    def timerEvent(self, event):
-        # update solver
-        self.fs.velocitySolver()
-        self.fs.densitySolver()
-        self.repaint()
-    
     def paintEvent_rects(self, event):
         """ Drawing rect for each cells, getting slower in high cell counts
             Can also draw velocity
-            """
+        """
         paint = QtGui.QPainter()
         paint.begin(self)
         # draw grid
@@ -119,9 +106,6 @@ class DrawFluidQt(QtGui.QMainWindow):
         # draw grid
         rectSizeDimension = self.rectSize * self.n
         color = QtGui.QColor(255, 255, 255)
-        #paint.setPen(color)
-        #paint.setBrush(color)
-        #paint.drawRect(self.rectSize/2, self.rectSize/2, (self.n-1)*self.rectSize, (self.n-1)*self.rectSize)
         self.image.fill(color.rgb())
         for i in xrange(self.n):
             for j in xrange(self.n):
@@ -135,23 +119,7 @@ class DrawFluidQt(QtGui.QMainWindow):
                     #c2 = int( (1.0 - self.fs.curl[self.I(i, j)]) * 255 )
                     if c < 0: c = 0                    
                     color.setRgb(c,c,c)
-                    #color.setRgb(c,c2,(c2+c)/2)
-                    #paint.setPen(color)
-                    #paint.setBrush(color)
-                    #paint.drawRect(dx, dy, self.rectSize, self.rectSize)
                     self.image.setPixel(i,j,color.rgb())
-                # velocity
-                if self.drawVelocityField:
-                    u = self.fs.u[self.I(i,j)]
-                    v = self.fs.v[self.I(i,j)]
-                    color.setRgb(255,0,0)
-                    paint.setPen(color)
-                    dx_mid = dx+rectSize/2
-                    dy_mid = dy+rectSize/2
-                    paint.drawLine(dx_mid,dy_mid,dx_mid+(u*rectSize),dy_mid+(v*rectSize))
-        #self.painter.drawImage(QtCore.QPoint(0,0),self.image) # we could also draw the QImage like this
-        #paint.end()
-        cmpPos = QtCore.QPoint(0,0)
         target = QtCore.QRectF( 0, 0, rectSizeDimension, rectSizeDimension )
         source = QtCore.QRectF( 0, 0, self.n, self.n )
         paint.drawImage(target, self.image, source )
@@ -286,7 +254,13 @@ class DrawFluidQt(QtGui.QMainWindow):
     
     def resizeEvent(self,event):
         self.dimension = self.height()
-        self.rectSize = self.dimension / self.n        
+        self.rectSize = self.dimension / self.n
+
+    def I(self,i,j):
+        return i + (self.n + 2) * j
+
+    def closeEvent(self, event):
+        self.solverThread.terminate()
 
 
 
@@ -306,7 +280,7 @@ class SolverThread(QtCore.QThread):
 
 class FluidSolver(object):
     def __init__(self):
-        print "### Python FluidSolver 1.0 - Grid based method as described by Jos Stam. ###"
+        print "### Python FluidSolver 1.0 - Grid based method as described by Jos Stam."
         self.visc = 0.0
         self.diff = 0.0
         self.linearSolverIterations = 20
@@ -558,7 +532,7 @@ class FluidSolverC(FluidSolver):
         """
     def __init__(self):
         FluidSolver.__init__(self)
-        print "### C extentions in use ###"
+        print "### C extentions in use"
         # I indexer and curl as support code for C inliners
         self.support_code = """
             #include <math.h>
