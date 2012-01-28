@@ -5,26 +5,27 @@
     '''
 
 import sys, math
-from PySide import QtGui, QtCore
-#from PyQt4 import QtGui, QtCore
+try: from PySide import QtGui, QtCore
+except: from PyQt4 import QtGui, QtCore
 try: from scipy import weave
 except: print "scipy.weave import failed - FluidSolverC won't work, pure python solver will be used"
+
 
 
 class DrawFluidQt(QtGui.QMainWindow):
     def __init__(self, parent=None):
         QtGui.QMainWindow.__init__(self, parent)
         
-        self.dimension = 260
-        self.n = 30
+        self.dimension = 400
+        self.n = 50
         self.rectSize = self.dimension / self.n
         self.dt = .3 # timestep: the higher the faster the fluid will evolve        
         
         # py or c extended solver
-        try: 
+        try:
             from scipy import weave
             self.enableCExtentions(True)
-        except: 
+        except:
             self.enableCExtentions(False)
         
         self.fs.setup(self.n, self.dt, viscosity=0.0, diffusion=0.0, vorticityConfinement=1, linearSolverIterations=5)
@@ -45,7 +46,7 @@ class DrawFluidQt(QtGui.QMainWindow):
         self.solverThread.start()
         # image
         self.saveImage = False # on-off flag (shortcut i), note that images will always be written out at (non-scaled) true size where 1n=1pixel
-        self.image = QtGui.QImage(self.n,self.n,QtGui.QImage.Format_RGB32)
+        self.image = QtGui.QImage(self.dimension,self.dimension,QtGui.QImage.Format_RGB32)
         self.imagePath = "/tmp/"
         self.imageName = "pyFluid"
         self.imageType = "JPG" # JPG PNG GIF TIFF BMP
@@ -67,9 +68,10 @@ class DrawFluidQt(QtGui.QMainWindow):
         self.fs.densitySolver()
         self.repaint()
     
-    def paintEvent(self, event):
-        """ In high cell count this becomes inefficient..
-        """
+    def paintEvent_rects(self, event):
+        """ Drawing rect for each cells, getting slower in high cell counts
+            Can also draw velocity
+            """
         paint = QtGui.QPainter()
         paint.begin(self)
         # draw grid
@@ -109,6 +111,59 @@ class DrawFluidQt(QtGui.QMainWindow):
         paint.end()
         if self.saveImage: self.writeImage()
     
+    def paintEvent_image(self, event):
+        """ Draw the solver output by filling a QImage, faster than the rect method
+            No velocity drawing here for now
+            """
+        paint = QtGui.QPainter(self)
+        # draw grid
+        rectSizeDimension = self.rectSize * self.n
+        color = QtGui.QColor(255, 255, 255)
+        #paint.setPen(color)
+        #paint.setBrush(color)
+        #paint.drawRect(self.rectSize/2, self.rectSize/2, (self.n-1)*self.rectSize, (self.n-1)*self.rectSize)
+        self.image.fill(color.rgb())
+        for i in xrange(self.n):
+            for j in xrange(self.n):
+                dx = (i * (self.rectSize))
+                dy = (j * (self.rectSize))
+                # density
+                if i == 0 or i == self.n-1 or j == 0 or j == self.n-1: continue
+                elif self.fs.d[self.I(i, j)] > 0.0085: # making this a small value rather than 0 to avoid drawing those cells
+                    # get denisty value from solver density array
+                    c = int( (1.0 - self.fs.d[self.I(i, j)]) * 255 )
+                    #c2 = int( (1.0 - self.fs.curl[self.I(i, j)]) * 255 )
+                    if c < 0: c = 0                    
+                    color.setRgb(c,c,c)
+                    #color.setRgb(c,c2,(c2+c)/2)
+                    #paint.setPen(color)
+                    #paint.setBrush(color)
+                    #paint.drawRect(dx, dy, self.rectSize, self.rectSize)
+                    self.image.setPixel(i,j,color.rgb())
+                # velocity
+                if self.drawVelocityField:
+                    u = self.fs.u[self.I(i,j)]
+                    v = self.fs.v[self.I(i,j)]
+                    color.setRgb(255,0,0)
+                    paint.setPen(color)
+                    dx_mid = dx+rectSize/2
+                    dy_mid = dy+rectSize/2
+                    paint.drawLine(dx_mid,dy_mid,dx_mid+(u*rectSize),dy_mid+(v*rectSize))
+        #self.painter.drawImage(QtCore.QPoint(0,0),self.image) # we could also draw the QImage like this
+        #paint.end()
+        cmpPos = QtCore.QPoint(0,0)
+        target = QtCore.QRectF( 0, 0, rectSizeDimension, rectSizeDimension )
+        source = QtCore.QRectF( 0, 0, self.n, self.n )
+        paint.drawImage(target, self.image, source )
+    
+    def paintEvent(self, event):
+        """ Switching paint event to rects if velocity is requested, should unify that at some point.
+            """
+        if self.drawVelocityField:
+            self.paintEvent_rects(event)
+        else:
+            self.paintEvent_image(event)    
+    
     def writeImage(self):
         self.image.save(self.imagePath+"//"+self.imageName+"."+str(self.frame)+"."+self.imageType.lower(),self.imageType)
         self.frame+=1
@@ -141,7 +196,15 @@ class DrawFluidQt(QtGui.QMainWindow):
         if self.j > self.n: self.j = self.n
         if self.j < 1: self.j = 1
         if self.add_type == "density":
-            self.fs.dOld[self.I(self.i, self.j)] = strength
+            # varying the inject size a bit according to the grid size
+            injectSize = 1
+            if self.n > 69: injectSize = 2
+            if self.n > 149: injectSize = 3
+            if self.n > 199: injectSize = 4
+            for i in xrange(injectSize*-1,injectSize):
+                self.fs.dOld[self.I(self.i, self.j+i)] = strength
+            for i in xrange(injectSize*-1,injectSize):
+                self.fs.dOld[self.I(self.i+i, self.j)] = strength
         if self.add_type == "velocity":
             self.fs.uOld[self.I(self.i,self.j)] = (self.x-self.xOld)/2
             self.fs.vOld[self.I(self.i,self.j)] = (self.y-self.yOld)/2
@@ -161,12 +224,12 @@ class DrawFluidQt(QtGui.QMainWindow):
                 else: self.fs.buoyancy_flag = False
             elif event.text() == ",":
                 self.dt -= 0.05
-                if self.dt > 1: self.dt = 1 
+                if self.dt > 1: self.dt = 1
                 if self.dt < 0: self.dt = 0
                 self.fs.dt = self.dt
             elif event.text() == ".":
                 self.dt += 0.05
-                if self.dt > 1: self.dt = 1 
+                if self.dt > 1: self.dt = 1
                 if self.dt < 0: self.dt = 0
                 self.fs.dt = self.dt
             elif event.text() == "[":
@@ -183,7 +246,7 @@ class DrawFluidQt(QtGui.QMainWindow):
                 self.image = QtGui.QImage(self.n,self.n,QtGui.QImage.Format_RGB32)
             elif event.text() == "a":
                 self.dimension += 20
-                self.rectSize = self.dimension / self.n 
+                self.rectSize = self.dimension / self.n
                 self.resize(self.dimension, self.dimension)
             elif event.text() == "z":
                 self.dimension -= 20
@@ -210,7 +273,7 @@ class DrawFluidQt(QtGui.QMainWindow):
             self.updateStatusBar()
     
     def updateStatusBar(self):
-        statusBarText = 'n='+str(self.n)+"x"+str(self.n) + '([ ])  ' 
+        statusBarText = 'n='+str(self.n)+"x"+str(self.n) + '([ ])  '
         statusBarText += 'dt='+str(self.dt) + '(< >)  '
         statusBarText += 'vortConf='+str(int(self.fs.vorticityConfinement_flag)) + '(o)  '
         statusBarText += 'buoy='+str(int(self.fs.buoyancy_flag)) + '(b)  '
@@ -224,6 +287,8 @@ class DrawFluidQt(QtGui.QMainWindow):
     def resizeEvent(self,event):
         self.dimension = self.height()
         self.rectSize = self.dimension / self.n        
+
+
 
 class SolverThread(QtCore.QThread):
     def __init__(self, solver):
@@ -332,7 +397,7 @@ class FluidSolver(object):
                 dw_dx = dw_dx / length
                 dw_dy = dw_dy / length
                 # v curl
-                v = self.calc_curl(i, j) 
+                v = self.calc_curl(i, j)
                 # N x w
                 Fvc_x[self.I(i,j)] = dw_dy * -v
                 Fvc_y[self.I(i,j)] = dw_dx * v
@@ -482,15 +547,15 @@ class FluidSolver(object):
             else: x[self.I( i, self.n+1)] = x[self.I(i, self.n)]
         
         x[self.I(  0,   0)] = 0.5 * (x[self.I(1, 0  )] + x[self.I(  0, 1)])
-        x[self.I(  0, self.n+1)] = 0.5 * (x[self.I(1, self.n+1)] + x[self.I(  0, self.n)]) 
+        x[self.I(  0, self.n+1)] = 0.5 * (x[self.I(1, self.n+1)] + x[self.I(  0, self.n)])
         x[self.I(self.n+1,   0)] = 0.5 * (x[self.I(self.n, 0  )] + x[self.I(self.n+1, 1)])    
         x[self.I(self.n+1, self.n+1)] = 0.5 * (x[self.I(self.n, self.n+1)] + x[self.I(self.n+1, self.n)])   
 
 
 
 class FluidSolverC(FluidSolver):
-    """ extending solver with inlined C code called upon via the scipy.weave.inline functionality to enhance solver performance 
-    """
+    """ extending solver with inlined C code called upon via the scipy.weave.inline functionality to enhance solver performance
+        """
     def __init__(self):
         FluidSolver.__init__(self)
         print "### C extentions in use ###"
@@ -739,9 +804,8 @@ class FluidSolverC(FluidSolver):
 
 
 if __name__ == "__main__":
-    print "lala"
     app = QtGui.QApplication(sys.argv)
     window = DrawFluidQt()
-    #window.enableCExtentions(True)
     window.show()
     app.exec_()
+
