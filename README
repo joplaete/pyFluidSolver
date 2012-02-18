@@ -1,4 +1,5 @@
 requirements to run the code:
 PyQt4 or PySide
 optionally but recommended: scipy (uses weave to compile some c code on the fly to speed up the solving)
+http://vimeo.com/37023882
 
